@@ -1,0 +1,16 @@
+[package]
+name = "bkd-tree"
+version = "1.0.0"
+
+[dependencies]
+bincode = "1.0.1"
+byteorder = "1.2.7"
+failure = "0.1.3"
+random-access-storage = "0.6.0"
+serde = "1.0.80"
+serde_derive = "1.0.80"
+serde_json = "1.0.33"
+
+[dev-dependencies]
+random-access-disk = "0.6.0"
+random-access-memory = "0.5.0"
