@@ -101,13 +101,22 @@ impl<T> Point<T> for (T,T,T,T,T,T) {
   }
 }
 
-pub struct Op<P,V,T> where P: Serialize+Copy+Point<T> {
-  pub _marker: PhantomData<T>,
-  pub kind: OpKind,
+pub struct Row<P,V,T> where P: Serialize+Copy+Point<T> {
+  _marker: PhantomData<T>,
+  pub kind: RowKind,
   pub point: P,
   pub value: V
 }
-pub enum OpKind { Insert, Delete }
+pub enum RowKind { Insert, Delete }
+
+impl<P,V,T> Row<P,V,T> where P: Serialize+Copy+Point<T> {
+  pub fn insert (point: P, value: V) -> Self {
+    Self { _marker: PhantomData, kind: RowKind::Insert, point, value }
+  }
+  pub fn delete (point: P, value: V) -> Self {
+    Self { _marker: PhantomData, kind: RowKind::Delete, point, value }
+  }
+}
 
 #[derive(Serialize,Deserialize)]
 struct Meta {
@@ -125,7 +134,7 @@ impl Meta {
 }
 
 struct Staging<P,V,T> where P: Serialize+Copy+Point<T>, V: Serialize+Copy {
-  rows: Vec<Op<P,V,T>>,
+  rows: Vec<Row<P,V,T>>,
   n: usize,
   count: usize,
   data: Vec<u8>
@@ -146,7 +155,7 @@ impl<P,V,T> Staging<P,V,T> where P: Serialize+Copy+Point<T>, V: Serialize+Copy {
   pub fn size (&self) -> usize {
     self.data.len()
   }
-  pub fn add (&mut self, row: Op<P,V,T>) -> Result<bool,Error> {
+  pub fn add (&mut self, row: Row<P,V,T>) -> Result<bool,Error> {
     println!("row:{}",row.point.len());
     if self.rows.len() == self.n {
       self.rows[self.count] = row;
@@ -233,7 +242,7 @@ P: Serialize+Copy+Point<T>, V: Serialize+Copy {
   pub fn builder (storage: U) -> BKDTreeBuilder<S,U,P,V,T> {
     BKDTreeBuilder::new(storage)
   }
-  pub fn batch (&mut self, rows: Vec<Op<P,V,T>>) -> Result<(),Error> {
+  pub fn batch (&mut self, rows: Vec<Row<P,V,T>>) -> Result<(),Error> {
     for row in rows {
       let full = self.staging.add(row)?;
       if full {

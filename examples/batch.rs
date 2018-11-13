@@ -6,7 +6,7 @@ extern crate rand;
 use std::path::PathBuf;
 use random_access_disk::RandomAccessDisk;
 use failure::Error;
-use bkd_tree::{BKDTree,Op,OpKind::Insert};
+use bkd_tree::{BKDTree,Row};
 use rand::random;
 use std::marker::PhantomData;
 
@@ -17,7 +17,7 @@ fn main () -> Result<(),Error> {
     let lat: f32 = (random::<f32>()*2.0-1.0)*90.0;
     let id = random::<u32>();
     bkd.batch(vec![
-      Op { _marker: PhantomData, kind: Insert, point: [lon,lat], value: id }
+      Row::insert([lon,lat],id)
     ])?;
   }
   Ok(())
