@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use failure::Error;
 use random_access_storage::RandomAccess;
 use crate::{BKDTree,Point};
-use serde::Serialize;
+use serde::{Serialize,de::DeserializeOwned};
 
 pub struct BKDTreeBuilder<S,U,P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
@@ -37,7 +37,8 @@ U: (Fn(&str) -> Result<S,Error>) {
       storage: storage
     }
   }
-  pub fn build (self) -> Result<BKDTree<S,U,P,V,T>,Error> {
+  pub fn build<'a> (self) -> Result<BKDTree<S,U,P,V,T>,Error>
+  where P: DeserializeOwned, V: DeserializeOwned {
     let bkd = BKDTree::open(self.storage)?;
     Ok(bkd)
   }

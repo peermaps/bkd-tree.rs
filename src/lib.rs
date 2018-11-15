@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::mem::{size_of};
 use std::fmt::Debug;
 use serde_json as json;
-use serde::{Serialize,Deserialize};
+use serde::{Serialize,de::DeserializeOwned};
 use serde_derive::{Serialize,Deserialize};
 use bincode::{serialize,deserialize};
 
@@ -207,6 +207,24 @@ T: Debug+PartialOrd+'static {
       data: vec![0;len]
     }
   }
+  pub fn load (&mut self, buf: Vec<u8>) -> Result<(),Error>
+  where P: DeserializeOwned, V: DeserializeOwned {
+    let ucount: u32 = deserialize(&buf[0..4])?;
+    self.count = ucount as usize;
+    self.rows = vec![];
+    let presize = (self.n+7)/8;
+    let size = size_of::<P>() + size_of::<V>();
+    for i in 0..self.count {
+      let j = 4 + presize + i*size;
+      let is_insert = ((buf[4+i/8] >> (i%8)) & 1) == 1;
+      let (point,value): (P,V) = deserialize(&buf[j..j+size])?;
+      self.rows.push(match is_insert {
+        true => Row::insert(point, value),
+        false => Row::delete(point, value)
+      });
+    }
+    Ok(())
+  }
   #[inline]
   pub fn size (&self) -> usize {
     self.data.len()
@@ -224,9 +242,12 @@ T: Debug+PartialOrd+'static {
     self.count = 0;
   }
   pub fn pack (&mut self) -> Result<(usize,&Vec<u8>),Error> {
-    let size = 0;
+    let ucount = self.count as u32;
+    let buf: Vec<u8> = serialize(&ucount)?;
+    self.data[0..4].copy_from_slice(&buf[0..]);
     let psize = size_of::<P>();
     let vsize = size_of::<V>();
+    let presize = (self.n+7)/8;
     for i in 0..self.count {
       let row = &self.rows[i];
       let bit = match &row.kind {
@@ -235,13 +256,14 @@ T: Debug+PartialOrd+'static {
       };
       let j = 4 + (i+7)/8;
       self.data[j] = self.data[j] | bit;
-      let offset = 4+i*(psize+vsize);
+      let offset = 4+presize+i*(psize+vsize);
       let pv = (&row.point,&row.value);
       let end_offset = offset+psize+vsize;
       let buf: Vec<u8> = serialize(&pv)?;
       self.data[offset..end_offset].copy_from_slice(&buf[0..]);
     }
-    Ok((self.count,&self.data))
+    //Ok((4+presize+self.count*(psize+vsize),&self.data))
+    Ok((self.data.len(),&self.data))
   }
 }
 
@@ -269,7 +291,8 @@ V: Debug+Serialize+Copy+'static,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
-  pub fn open (open_storage: U) -> Result<Self,Error> {
+  pub fn open (open_storage: U) -> Result<Self,Error>
+  where P: DeserializeOwned, V: DeserializeOwned {
     let branch_factor: usize = 4;
     let n = branch_factor.pow(5);
     let dim = 2;
@@ -287,15 +310,17 @@ U: (Fn(&str) -> Result<S,Error>) {
     bkd.init()?;
     Ok(bkd)
   }
-  fn init (&mut self) -> Result<(),Error> {
+  fn init (&mut self) -> Result<(),Error>
+  where P: DeserializeOwned, V: DeserializeOwned {
     self.meta = match self.meta_store.read(0, 1024) {
       Err(_) => Ok(Meta::new(self.branch_factor)),
       Ok(b) => json::from_slice(&b)
     }?;
     let buf = match self.staging_store.read(0, self.staging.size()) {
-      Err(_) => vec![0;self.staging.size()],
+      Err(e) => vec![0;self.staging.size()],
       Ok(b) => b
     };
+    self.staging.load(buf)?;
     Ok(())
   }
   pub fn builder (storage: U) -> BKDTreeBuilder<S,U,P,V,T> {
