@@ -58,11 +58,11 @@ U: (Fn(&str) -> Result<S,Error>) {
       let row = &self.bkd.staging.rows[self.staging_index];
       self.staging_index += 1;
       if contains(self.bbox.0, self.bbox.1, row.point) {
-        match row.kind {
-          ref Insert => {
+        match &row.kind {
+          RowKind::Insert => {
             return Some((row.point,row.value))
           },
-          ref Delete => {
+          RowKind::Delete => {
             self.deletes.push((row.point,row.value));
           }
         };
@@ -180,6 +180,16 @@ impl Meta {
       mask: vec![]
     }
   }
+  fn save<S,U> (&self, store: &mut S) -> Result<(),Error> where
+  S: Debug+RandomAccess<Error=Error>,
+  U: (Fn(&str) -> Result<S,Error>) {
+    let mut buf: Vec<u8> = vec![0x20;1024];
+    buf[1023] = 0x0a;
+    let jbuf = json::to_vec(self)?;
+    buf[0..jbuf.len()].copy_from_slice(&jbuf[0..]);
+    store.write(0, &buf)?;
+    Ok(())
+  }
 }
 
 #[derive(Debug)]
@@ -197,7 +207,7 @@ impl<P,V,T> Staging<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy+'static,
 T: Debug+PartialOrd+'static {
-  pub fn new (n: usize, dim: usize) -> Self {
+  pub fn new (n: usize) -> Self {
     let presize = (n+7)/8;
     let len = 4+presize+n*(size_of::<P>()+size_of::<V>());
     Self {
@@ -251,8 +261,8 @@ T: Debug+PartialOrd+'static {
     for i in 0..self.count {
       let row = &self.rows[i];
       let bit = match &row.kind {
-        Insert => (1 << (self.count % 8)),
-        Delete => 0
+        RowKind::Insert => (1 << (self.count % 8)),
+        RowKind::Delete => 0
       };
       let j = 4 + (i+7)/8;
       self.data[j] = self.data[j] | bit;
@@ -295,7 +305,6 @@ U: (Fn(&str) -> Result<S,Error>) {
   where P: DeserializeOwned, V: DeserializeOwned {
     let branch_factor: usize = 4;
     let n = branch_factor.pow(5);
-    let dim = 2;
     let mut bkd = Self {
       meta_store: open_storage("meta")?,
       staging_store: open_storage("staging")?,
@@ -304,8 +313,8 @@ U: (Fn(&str) -> Result<S,Error>) {
       trees: vec![],
       branch_factor: branch_factor,
       n,
-      dim,
-      staging: Staging::new(n,dim)
+      dim: 0,
+      staging: Staging::new(n)
     };
     bkd.init()?;
     Ok(bkd)
@@ -313,11 +322,15 @@ U: (Fn(&str) -> Result<S,Error>) {
   fn init (&mut self) -> Result<(),Error>
   where P: DeserializeOwned, V: DeserializeOwned {
     self.meta = match self.meta_store.read(0, 1024) {
-      Err(_) => Ok(Meta::new(self.branch_factor)),
+      Err(_) => {
+        let meta = Meta::new(self.branch_factor);
+        meta.save::<S,U>(&mut self.meta_store)?;
+        Ok(meta)
+      },
       Ok(b) => json::from_slice(&b)
     }?;
     let buf = match self.staging_store.read(0, self.staging.size()) {
-      Err(e) => vec![0;self.staging.size()],
+      Err(_) => vec![0;self.staging.size()],
       Ok(b) => b
     };
     self.staging.load(buf)?;
