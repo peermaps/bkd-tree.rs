@@ -12,10 +12,10 @@ use rand::random;
 fn main () -> Result<(),Error> {
   let mut bkd = BKDTree::open(storage)?;
   let args: Vec<String> = std::env::args().collect();
-  if args.len() < 2 { return bail!("must provide a command") }
+  if args.len() < 2 { bail!("must provide a command") }
 
   if args[1] == "populate" {
-    if args.len() < 3 { return bail!("populate requires a number") }
+    if args.len() < 3 { bail!("populate requires a number") }
     let n = args[2].parse()?;
     let batch = (0..n).map(|_| {
       let lon: f32 = (random::<f32>()*2.0-1.0)*180.0;
@@ -25,9 +25,7 @@ fn main () -> Result<(),Error> {
     }).collect();
     bkd.batch(batch)?;
   } else if args[1] == "query" {
-    if args.len() < 6 {
-      return bail!("query requires 4 bounds (w s e n)");
-    }
+    if args.len() < 6 { bail!("query requires 4 bounds (w s e n)") }
     let bbox = (
       [args[2].parse()?,args[3].parse()?],
       [args[4].parse()?,args[5].parse()?]

@@ -328,7 +328,7 @@ U: (Fn(&str) -> Result<S,Error>) {
   }
   fn build_walk (&mut self, buf: &mut Vec<u8>, rows: &mut [&Row<P,V,T>],
   depth: usize, index: usize) -> Result<(),Error> {
-    let B = self.branch_factor;
+    let b = self.branch_factor;
     if rows.len() == 1 {
       self.build_write(buf, index, rows[0])?;
     }
@@ -347,7 +347,7 @@ U: (Fn(&str) -> Result<S,Error>) {
     let mut n = 0;
     let mut pk = std::usize::MAX;
     let len = rows.len() as f32;
-    let step = len / (B as f32);
+    let step = len / (b as f32);
     let mut i = step;
     while i < len {
       let k = i as usize;
@@ -355,17 +355,17 @@ U: (Fn(&str) -> Result<S,Error>) {
       pk = k;
       self.build_write(buf, index+n, rows[k])?;
       self.build_walk(buf, &mut rows[j..k],
-        depth+1, Self::calc_index(B, index, n))?;
+        depth+1, Self::calc_index(b, index, n))?;
       j = k + 1;
       n += 1;
       i += step;
    }
     self.build_walk(buf, &mut rows[j..],
-      depth+1, Self::calc_index(B, index, n))?;
+      depth+1, Self::calc_index(b, index, n))?;
     Ok(())
   }
-  fn calc_index (B: usize, index: usize, n: usize) -> usize {
-    index * B + (B-1)*(n+1)
+  fn calc_index (b: usize, index: usize, n: usize) -> usize {
+    index * b + (b-1)*(n+1)
   }
   fn build_write (&mut self, buf: &mut Vec<u8>, index: usize,
   row: &Row<P,V,T>) -> Result<(),Error> {
@@ -376,18 +376,10 @@ U: (Fn(&str) -> Result<S,Error>) {
     (&mut buf[i..i+self.row_size]).copy_from_slice(&serialize(&pv)?[0..]);
     Ok(())
   }
-  fn write (&mut self, index: usize, buf: Vec<u8>) -> Result<(),Error> {
-    // TODO: cache writes integrated with the LRU
-    self.storage.write(index, &buf)?;
-    Ok(())
-  }
-  fn flush (&mut self, buf: &Vec<u8>) -> Result<(),Error> {
-    self.storage.write(0, buf)
-  }
   pub fn build (&mut self, rows: &mut Vec<&Row<P,V,T>>) -> Result<(),Error> {
     let mut buf = vec![0;self.bytes];
     self.build_walk(&mut buf, rows, 0, 0)?;
-    self.flush(&buf);
+    self.storage.write(0, &buf)?;
     Ok(())
   }
 }
