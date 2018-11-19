@@ -5,17 +5,17 @@ extern crate rand;
 
 use std::path::PathBuf;
 use random_access_disk::RandomAccessDisk;
-use failure::{Error,err_msg};
+use failure::{Error,bail};
 use bkd_tree::{BKDTree,Row};
 use rand::random;
 
 fn main () -> Result<(),Error> {
   let mut bkd = BKDTree::open(storage)?;
   let args: Vec<String> = std::env::args().collect();
-  if args.len() < 2 { return Err(err_msg("must provide a command")) }
+  if args.len() < 2 { return bail!("must provide a command") }
 
   if args[1] == "populate" {
-    if args.len() < 3 { return Err(err_msg("populate requires a number")) }
+    if args.len() < 3 { return bail!("populate requires a number") }
     let n = args[2].parse()?;
     let batch = (0..n).map(|_| {
       let lon: f32 = (random::<f32>()*2.0-1.0)*180.0;
@@ -26,7 +26,7 @@ fn main () -> Result<(),Error> {
     bkd.batch(batch)?;
   } else if args[1] == "query" {
     if args.len() < 6 {
-      return Err(err_msg("query requires 4 bounds (w s e n)"));
+      return bail!("query requires 4 bounds (w s e n)");
     }
     let bbox = (
       [args[2].parse()?,args[3].parse()?],
