@@ -6,10 +6,10 @@ extern crate serde_derive;
 extern crate bincode;
 
 use random_access_storage::RandomAccess;
-use failure::{Error,err_msg};
+use failure::Error;
 use std::marker::PhantomData;
-use std::mem::{size_of};
-use std::fmt::{Debug};
+use std::mem::size_of;
+use std::fmt::Debug;
 use serde_json as json;
 use serde::{Serialize,de::DeserializeOwned};
 use serde_derive::{Serialize,Deserialize};
@@ -292,6 +292,7 @@ U: (Fn(&str) -> Result<S,Error>) {
   storage: S,
   branch_factor: usize,
   size: usize,
+  bytes: usize,
   n: usize,
   presize: usize,
   row_size: usize
@@ -303,7 +304,10 @@ V: Debug+Serialize+Copy,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
-  pub fn new (storage: S, branch_factor: usize, size: usize, n: usize) -> Self {
+  pub fn new (storage: S, branch_factor: usize, i: usize, n: usize) -> Self {
+    let presize = (n+7)/8;
+    let size = n*2usize.pow(i as u32);
+    let row_size = size_of::<P>() + size_of::<V>();
     Self {
       _marker0: PhantomData,
       _marker1: PhantomData,
@@ -312,20 +316,21 @@ U: (Fn(&str) -> Result<S,Error>) {
       storage,
       branch_factor,
       size,
+      bytes: presize + size*row_size,
       n,
-      presize: (n+7)/8,
-      row_size: (size_of::<P>()+size_of::<V>())
+      presize,
+      row_size
     }
   }
   pub fn copy_into (&self, out: &mut Vec<&Row<P,V,T>>) -> Result<(),Error> {
     // TODO: walk the tree and push rows to `out`
     Ok(())
   }
-  fn build_walk (&mut self, rows: &mut [&Row<P,V,T>], depth: usize, index: usize)
-  -> Result<(),Error> {
+  fn build_walk (&mut self, buf: &mut Vec<u8>, rows: &mut [&Row<P,V,T>],
+  depth: usize, index: usize) -> Result<(),Error> {
     let B = self.branch_factor;
     if rows.len() == 1 {
-      self.build_write(index, rows[0])?;
+      self.build_write(buf, index, rows[0])?;
     }
     if rows.len() <= 1 { return Ok(()) }
     let dim = rows[0].point.len();
@@ -348,25 +353,27 @@ U: (Fn(&str) -> Result<S,Error>) {
       let k = i as usize;
       if k == pk { break };
       pk = k;
-      self.build_write(index+n, rows[k])?;
-      self.build_walk(&mut rows[j..k], depth+1, Self::calc_index(B, index, n))?;
+      self.build_write(buf, index+n, rows[k])?;
+      self.build_walk(buf, &mut rows[j..k],
+        depth+1, Self::calc_index(B, index, n))?;
       j = k + 1;
       n += 1;
       i += step;
    }
-    self.build_walk(&mut rows[j..], depth+1, Self::calc_index(B, index, n))?;
+    self.build_walk(buf, &mut rows[j..],
+      depth+1, Self::calc_index(B, index, n))?;
     Ok(())
   }
   fn calc_index (B: usize, index: usize, n: usize) -> usize {
     index * B + (B-1)*(n+1)
   }
-  fn build_write (&mut self, index: usize, row: &Row<P,V,T>) -> Result<(),Error> {
-    let mut hbuf = self.read(index/8,1)?;
-    hbuf[0] = hbuf[0] | (1 << (index % 8));
-    self.write(index/8, hbuf)?;
+  fn build_write (&mut self, buf: &mut Vec<u8>, index: usize,
+  row: &Row<P,V,T>) -> Result<(),Error> {
+    let j = index/8;
+    buf[j] = buf[j] | (1 << (index % 8));
     let pv = (&row.point,&row.value);
     let i = self.presize + index*self.row_size;
-    self.write(i, serialize(&pv)?)?;
+    (&mut buf[i..i+self.row_size]).copy_from_slice(&serialize(&pv)?[0..]);
     Ok(())
   }
   fn write (&mut self, index: usize, buf: Vec<u8>) -> Result<(),Error> {
@@ -374,19 +381,13 @@ U: (Fn(&str) -> Result<S,Error>) {
     self.storage.write(index, &buf)?;
     Ok(())
   }
-  fn read (&mut self, index: usize, length: usize) -> Result<Vec<u8>,Error> {
-    match self.storage.read(index,index+length) {
-      Err(_) => Ok(vec![0;length]),
-      Ok(buf) => Ok(buf)
-    }
-  }
-  fn flush (&mut self) -> Result<(),Error> {
-    // TODO: write queued writes to storage
-    Ok(())
+  fn flush (&mut self, buf: &Vec<u8>) -> Result<(),Error> {
+    self.storage.write(0, buf)
   }
   pub fn build (&mut self, rows: &mut Vec<&Row<P,V,T>>) -> Result<(),Error> {
-    println!("build {} rows: {}", rows.len(), self.size);
-    self.build_walk(rows, 0, 0)?;
+    let mut buf = vec![0;self.bytes];
+    self.build_walk(&mut buf, rows, 0, 0)?;
+    self.flush(&buf);
     Ok(())
   }
 }
@@ -447,7 +448,7 @@ U: (Fn(&str) -> Result<S,Error>) {
       self.trees.push(Tree::new(
         (self.open_storage)(&format!("tree{}", i))?,
         self.branch_factor,
-        self.n*2usize.pow(i as u32),
+        i,
         self.n
       ));
     }
@@ -468,7 +469,7 @@ U: (Fn(&str) -> Result<S,Error>) {
         self.trees.push(Tree::new(
           (self.open_storage)(&format!("tree{}", i))?,
           self.branch_factor,
-          self.n*2usize.pow(i as u32),
+          i,
           self.n
         ));
         i
