@@ -9,7 +9,7 @@ use random_access_storage::RandomAccess;
 use failure::{Error,err_msg};
 use std::marker::PhantomData;
 use std::mem::{size_of};
-use std::fmt::Debug;
+use std::fmt::{Debug};
 use serde_json as json;
 use serde::{Serialize,de::DeserializeOwned};
 use serde_derive::{Serialize,Deserialize};
@@ -291,7 +291,10 @@ U: (Fn(&str) -> Result<S,Error>) {
   _marker3: PhantomData<U>,
   storage: S,
   branch_factor: usize,
-  size: usize
+  size: usize,
+  n: usize,
+  presize: usize,
+  row_size: usize
 }
 
 impl<S,U,P,V,T> Tree<S,U,P,V,T> where
@@ -300,7 +303,7 @@ V: Debug+Serialize+Copy,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
-  pub fn new (storage: S, branch_factor: usize, size: usize) -> Self {
+  pub fn new (storage: S, branch_factor: usize, size: usize, n: usize) -> Self {
     Self {
       _marker0: PhantomData,
       _marker1: PhantomData,
@@ -308,7 +311,10 @@ U: (Fn(&str) -> Result<S,Error>) {
       _marker3: PhantomData,
       storage,
       branch_factor,
-      size
+      size,
+      n,
+      presize: (n+7)/8,
+      row_size: (size_of::<P>()+size_of::<V>())
     }
   }
   pub fn copy_into (&self, out: &mut Vec<&Row<P,V,T>>) -> Result<(),Error> {
@@ -347,7 +353,7 @@ U: (Fn(&str) -> Result<S,Error>) {
       j = k + 1;
       n += 1;
       i += step;
-    }
+   }
     self.build_walk(&mut rows[j..], depth+1, Self::calc_index(B, index, n))?;
     Ok(())
   }
@@ -359,7 +365,8 @@ U: (Fn(&str) -> Result<S,Error>) {
     hbuf[0] = hbuf[0] | (1 << (index % 8));
     self.write(index/8, hbuf)?;
     let pv = (&row.point,&row.value);
-    self.write(index, serialize(&pv)?)?;
+    let i = self.presize + index*self.row_size;
+    self.write(i, serialize(&pv)?)?;
     Ok(())
   }
   fn write (&mut self, index: usize, buf: Vec<u8>) -> Result<(),Error> {
@@ -368,7 +375,6 @@ U: (Fn(&str) -> Result<S,Error>) {
     Ok(())
   }
   fn read (&mut self, index: usize, length: usize) -> Result<Vec<u8>,Error> {
-    // TODO: put an LRU here for pages and do slicing
     match self.storage.read(index,index+length) {
       Err(_) => Ok(vec![0;length]),
       Ok(buf) => Ok(buf)
@@ -441,7 +447,8 @@ U: (Fn(&str) -> Result<S,Error>) {
       self.trees.push(Tree::new(
         (self.open_storage)(&format!("tree{}", i))?,
         self.branch_factor,
-        self.n*2usize.pow(i as u32)
+        self.n*2usize.pow(i as u32),
+        self.n
       ));
     }
     let buf = match self.staging_store.read(0, self.staging.size()) {
@@ -461,7 +468,8 @@ U: (Fn(&str) -> Result<S,Error>) {
         self.trees.push(Tree::new(
           (self.open_storage)(&format!("tree{}", i))?,
           self.branch_factor,
-          self.n*2usize.pow(i as u32)
+          self.n*2usize.pow(i as u32),
+          self.n
         ));
         i
       }
