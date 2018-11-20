@@ -20,8 +20,8 @@ pub use crate::bkdtree_builder::BKDTreeBuilder;
 
 #[derive(Debug)]
 pub struct QueryResults<S,U,P,V,T> where
-P: Debug+Serialize+Copy+Point<T>+'static,
-V: Debug+Serialize+Copy+'static,
+P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
+V: Debug+Serialize+DeserializeOwned+Copy+'static,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
@@ -32,8 +32,8 @@ U: (Fn(&str) -> Result<S,Error>) {
 }
 
 impl<S,U,P,V,T> QueryResults<S,U,P,V,T> where
-P: Debug+Serialize+Copy+Point<T>+'static,
-V: Debug+Serialize+Copy+'static,
+P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
+V: Debug+Serialize+DeserializeOwned+Copy+'static,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
@@ -48,8 +48,8 @@ U: (Fn(&str) -> Result<S,Error>) {
 }
 
 impl<S,U,P,V,T> Iterator for QueryResults<S,U,P,V,T> where
-P: Debug+Serialize+Copy+Point<T>+'static,
-V: Debug+Serialize+Copy+'static,
+P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
+V: Debug+Serialize+DeserializeOwned+Copy+'static,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
@@ -280,8 +280,8 @@ T: Debug+PartialOrd+'static {
 
 #[derive(Debug,Clone,Copy)]
 struct Tree<S,U,P,V,T> where
-P: Debug+Serialize+Copy+Point<T>+'static,
-V: Debug+Serialize+Copy,
+P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
+V: Debug+Serialize+DeserializeOwned+Copy,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
@@ -299,14 +299,14 @@ U: (Fn(&str) -> Result<S,Error>) {
 }
 
 impl<S,U,P,V,T> Tree<S,U,P,V,T> where
-P: Debug+Serialize+Copy+Point<T>+'static,
-V: Debug+Serialize+Copy,
+P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
+V: Debug+Serialize+DeserializeOwned+Copy,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   pub fn new (storage: S, branch_factor: usize, i: usize, n: usize) -> Self {
-    let presize = (n+7)/8;
     let size = n*2usize.pow(i as u32);
+    let presize = (size+7)/8;
     let row_size = size_of::<P>() + size_of::<V>();
     Self {
       _marker0: PhantomData,
@@ -322,8 +322,19 @@ U: (Fn(&str) -> Result<S,Error>) {
       row_size
     }
   }
-  pub fn copy_into (&self, out: &mut Vec<&Row<P,V,T>>) -> Result<(),Error> {
-    // TODO: walk the tree and push rows to `out`
+  pub fn copy_into (&mut self, out: &mut Vec<&Row<P,V,T>>) -> Result<(),Error> {
+    let buf = self.storage.read(0, self.bytes)?;
+    let presize = self.presize;
+    let row_size = self.row_size;
+    for i in 0..self.size {
+      let j = presize + i * row_size;
+      let (point,value): (P,V) = deserialize(&buf[j..j+row_size])?;
+      let k = (buf[i/8] >> (i%8)) & 1;
+      out.push(Box::leak(Box::new(match k {
+        0 => Row::delete(point, value),
+        _ => Row::insert(point, value)
+      })));
+    }
     Ok(())
   }
   fn build_walk (&mut self, buf: &mut Vec<u8>, rows: &mut [&Row<P,V,T>],
@@ -345,12 +356,12 @@ U: (Fn(&str) -> Result<S,Error>) {
     });
     let mut j = 0;
     let mut n = 0;
-    let mut pk = std::usize::MAX;
+    let mut pk = std::usize::MAX-1;
     let len = rows.len() as f32;
     let step = len / (b as f32);
     let mut i = step;
     while i < len {
-      let k = i as usize;
+      let k = i.floor() as usize;
       if k == pk { break };
       pk = k;
       self.build_write(buf, index+n, rows[k])?;
@@ -359,7 +370,7 @@ U: (Fn(&str) -> Result<S,Error>) {
       j = k + 1;
       n += 1;
       i += step;
-   }
+    }
     self.build_walk(buf, &mut rows[j..],
       depth+1, Self::calc_index(b, index, n))?;
     Ok(())
@@ -369,6 +380,8 @@ U: (Fn(&str) -> Result<S,Error>) {
   }
   fn build_write (&mut self, buf: &mut Vec<u8>, index: usize,
   row: &Row<P,V,T>) -> Result<(),Error> {
+    // TODO: hack, probably loses data:
+    if index > self.size { return Ok(()) }
     let j = index/8;
     buf[j] = buf[j] | (1 << (index % 8));
     let pv = (&row.point,&row.value);
@@ -386,8 +399,8 @@ U: (Fn(&str) -> Result<S,Error>) {
 
 #[derive(Debug)]
 pub struct BKDTree<S,U,P,V,T> where
-P: Debug+Serialize+Copy+Point<T>+'static,
-V: Debug+Serialize+Copy,
+P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
+V: Debug+Serialize+DeserializeOwned+Copy,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
@@ -403,8 +416,8 @@ U: (Fn(&str) -> Result<S,Error>) {
 }
 
 impl<S,U,P,V,T> BKDTree<S,U,P,V,T> where
-P: Debug+Serialize+Copy+Point<T>+'static,
-V: Debug+Serialize+Copy+'static,
+P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
+V: Debug+Serialize+DeserializeOwned+Copy+'static,
 T: Debug+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
@@ -452,7 +465,7 @@ U: (Fn(&str) -> Result<S,Error>) {
     Ok(())
   }
   fn merge (&mut self) -> Result<(),Error> {
-    let i = match (&self.meta.mask).into_iter().enumerate()
+    let last = match (&self.meta.mask).into_iter().enumerate()
     .skip_while(|(_,m)| **m).next() {
       Some((i,_)) => i,
       None => {
@@ -467,17 +480,14 @@ U: (Fn(&str) -> Result<S,Error>) {
         i
       }
     };
-    let last = self.trees.len()-1;
     let mut rows = Vec::with_capacity(self.trees[last].size);
     for row in &self.staging.rows { rows.push(row) }
-    for i in 0..self.trees.len() {
+    for i in 0..last {
       self.trees[i].copy_into(&mut rows)?;
+      self.meta.mask[i] = false;
     }
     self.trees[last].build(&mut rows)?;
-
-    for j in 0..i {
-      self.meta.mask[j] = false;
-    }
+    self.meta.mask[last] = true;
     self.meta.save::<S,U>(&mut self.meta_store)?;
     Ok(())
   }
