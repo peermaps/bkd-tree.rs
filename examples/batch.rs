@@ -30,8 +30,13 @@ fn main () -> Result<(),Error> {
       [args[2].parse()?,args[3].parse()?],
       [args[4].parse()?,args[5].parse()?]
     );
-    for (point,value) in bkd.query(bbox) {
-      println!("{{ point: {:?}, value: {:?} }}", point, value);
+    for r in bkd.query(bbox) {
+      match r {
+        Ok((point,value)) => {
+          println!("{{ point: {:?}, value: {:?} }}", point, value);
+        },
+        Err(e) => return Err(e)
+      }
     }
   }
   Ok(())

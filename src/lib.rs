@@ -4,12 +4,14 @@ extern crate serde_json;
 extern crate serde;
 extern crate serde_derive;
 extern crate bincode;
+extern crate num_traits;
 
 use random_access_storage::RandomAccess;
 use failure::Error;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::fmt::Debug;
+use num_traits::bounds::Bounded;
 use serde_json as json;
 use serde::{Serialize,de::DeserializeOwned};
 use serde_derive::{Serialize,Deserialize};
@@ -22,10 +24,15 @@ pub use crate::bkdtree_builder::BKDTreeBuilder;
 pub struct QueryResults<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy+'static,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   staging_index: usize,
+  tree_index: usize,
+  tree_depth: usize,
+  tree_cursors: Vec<usize>,
+  tree_results: Vec<(P,V)>,
+  search_window: (P,P),
   bkd: BKDTree<S,U,P,V,T>,
   deletes: Vec<(P,V)>,
   bbox: (P,P)
@@ -34,15 +41,25 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> QueryResults<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy+'static,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   fn new (bkd: BKDTree<S,U,P,V,T>, bbox: (P,P)) -> Self {
+    let mut search_window = (bbox.0,bbox.1);
+    for i in 0..bbox.0.len() {
+      search_window.0.set(i,T::min_value());
+      search_window.1.set(i,T::max_value());
+    }
     Self {
       bkd,
       bbox,
       deletes: vec![],
-      staging_index: 0
+      staging_index: 0,
+      tree_index: 0,
+      tree_depth: 0,
+      tree_cursors: vec![0],
+      tree_results: vec![],
+      search_window
     }
   }
 }
@@ -50,24 +67,58 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> Iterator for QueryResults<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy+'static,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
-  type Item = (P,V);
+  type Item = Result<(P,V),Error>;
   fn next (&mut self) -> Option<Self::Item> {
+    if self.tree_results.len() > 0 {
+      return Some(Ok(self.tree_results.pop().unwrap()));
+    }
     while self.staging_index < self.bkd.staging.count {
       let row = &self.bkd.staging.rows[self.staging_index];
       self.staging_index += 1;
       if contains(self.bbox.0, self.bbox.1, row.point) {
         match &row.kind {
           RowKind::Insert => {
-            return Some((row.point,row.value))
+            return Some(Ok((row.point,row.value)));
           },
           RowKind::Delete => {
             self.deletes.push((row.point,row.value));
           }
         };
       }
+    }
+    while self.tree_index < self.bkd.trees.len() {
+      if !self.bkd.meta.mask[self.tree_index] {
+        self.tree_index += 1;
+        self.tree_depth = 0;
+        continue;
+      }
+      let t = &mut self.bkd.trees[self.tree_index];
+      while self.tree_cursors.len() > 0 {
+        let s = t.query_step(
+          self.bbox,
+          &mut self.tree_results,
+          &self.tree_cursors,
+          self.tree_depth,
+          &mut self.search_window
+        );
+        match s {
+          Err(e) => return Some(Err(e)),
+          Ok(cursors) => {
+            self.tree_cursors = cursors;
+            self.tree_depth += 1;
+          }
+        }
+        if self.tree_results.len() > 0 {
+          return Some(Ok(self.tree_results.pop().unwrap()));
+        }
+      }
+      self.tree_cursors.truncate(0);
+      self.tree_cursors.push(0);
+      self.tree_depth = 0;
+      self.tree_index += 1;
     }
     None
   }
@@ -76,32 +127,45 @@ U: (Fn(&str) -> Result<S,Error>) {
 pub trait Point<T> where T: PartialOrd {
   fn len (self) -> usize;
   fn get (self, usize) -> T;
+  fn set (&mut self, usize, T) -> ();
 }
 impl<T> Point<T> for [T;2] where T: Copy+PartialOrd {
   fn len (self) -> usize { 2 }
   fn get (self, i: usize) -> T { self[i] }
+  fn set (&mut self, i: usize, v: T) -> () { self[i] = v }
 }
 impl<T> Point<T> for [T;3] where T: Copy+PartialOrd {
   fn len (self) -> usize { 3 }
   fn get (self, i: usize) -> T { self[i] }
+  fn set (&mut self, i: usize, v: T) -> () { self[i] = v }
 }
 impl<T> Point<T> for [T;4] where T: Copy+PartialOrd {
   fn len (self) -> usize { 4 }
   fn get (self, i: usize) -> T { self[i] }
+  fn set (&mut self, i: usize, v: T) -> () { self[i] = v }
 }
 impl<T> Point<T> for [T;5] where T: Copy+PartialOrd {
   fn len (self) -> usize { 5 }
   fn get (self, i: usize) -> T { self[i] }
+  fn set (&mut self, i: usize, v: T) -> () { self[i] = v }
 }
 impl<T> Point<T> for [T;6] where T: Copy+PartialOrd {
   fn len (self) -> usize { 6 }
   fn get (self, i: usize) -> T { self[i] }
+  fn set (&mut self, i: usize, v: T) -> () { self[i] = v }
 }
 impl<T> Point<T> for (T,T) where T: PartialOrd {
   fn len (self) -> usize { 2 }
   fn get (self, i: usize) -> T {
     match i%2 {
       0 => self.0, 1 => self.1,
+      _ => panic!("impossible out of bounds")
+    }
+  }
+  fn set (&mut self, i: usize, v: T) -> () {
+    match i%2 {
+      0 => { self.0 = v },
+      1 => { self.1 = v },
       _ => panic!("impossible out of bounds")
     }
   }
@@ -114,12 +178,29 @@ impl<T> Point<T> for (T,T,T) where T: PartialOrd {
       _ => panic!("impossible out of bounds")
     }
   }
+  fn set (&mut self, i: usize, v: T) -> () {
+    match i%3 {
+      0 => { self.0 = v },
+      1 => { self.1 = v },
+      2 => { self.2 = v },
+      _ => panic!("impossible out of bounds")
+    }
+  }
 }
 impl<T> Point<T> for (T,T,T,T) where T: PartialOrd {
   fn len (self) -> usize { 4 }
   fn get (self, i: usize) -> T {
     match i%4 {
       0 => self.0, 1 => self.1, 2 => self.2, 3 => self.3,
+      _ => panic!("impossible out of bounds")
+    }
+  }
+  fn set (&mut self, i: usize, v: T) -> () {
+    match i%4 {
+      0 => { self.0 = v },
+      1 => { self.1 = v },
+      2 => { self.2 = v },
+      3 => { self.3 = v },
       _ => panic!("impossible out of bounds")
     }
   }
@@ -133,6 +214,16 @@ impl<T> Point<T> for (T,T,T,T,T) where T: PartialOrd {
       _ => panic!("impossible out of bounds")
     }
   }
+  fn set (&mut self, i: usize, v: T) -> () {
+    match i%5 {
+      0 => { self.0 = v },
+      1 => { self.1 = v },
+      2 => { self.2 = v },
+      3 => { self.3 = v },
+      4 => { self.4 = v },
+      _ => panic!("impossible out of bounds")
+    }
+  }
 }
 impl<T> Point<T> for (T,T,T,T,T,T) where T: PartialOrd {
   fn len (self) -> usize { 6 }
@@ -143,12 +234,23 @@ impl<T> Point<T> for (T,T,T,T,T,T) where T: PartialOrd {
       _ => panic!("impossible out of bounds")
     }
   }
+  fn set (&mut self, i: usize, v: T) -> () {
+    match i%6 {
+      0 => { self.0 = v },
+      1 => { self.1 = v },
+      2 => { self.2 = v },
+      3 => { self.3 = v },
+      4 => { self.4 = v },
+      5 => { self.5 = v },
+      _ => panic!("impossible out of bounds")
+    }
+  }
 }
 
 #[derive(Debug)]
 pub struct Row<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
-T: Debug+PartialOrd {
+T: Debug+Bounded+PartialOrd {
   _marker: PhantomData<T>,
   pub kind: RowKind,
   pub point: P,
@@ -159,7 +261,7 @@ pub enum RowKind { Insert, Delete }
 
 impl<P,V,T> Row<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
-T: Debug+PartialOrd {
+T: Debug+Bounded+PartialOrd {
   pub fn insert (point: P, value: V) -> Self {
     Self { _marker: PhantomData, kind: RowKind::Insert, point, value }
   }
@@ -197,7 +299,7 @@ impl Meta {
 struct Staging<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy,
-T: Debug+PartialOrd {
+T: Debug+Bounded+PartialOrd {
   rows: Vec<Row<P,V,T>>,
   n: usize,
   count: usize,
@@ -207,7 +309,7 @@ T: Debug+PartialOrd {
 impl<P,V,T> Staging<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy+'static,
-T: Debug+PartialOrd+'static {
+T: Debug+Bounded+PartialOrd+'static {
   pub fn new (n: usize) -> Self {
     let presize = (n+7)/8;
     let len = 4+presize+n*(size_of::<P>()+size_of::<V>());
@@ -282,7 +384,7 @@ T: Debug+PartialOrd+'static {
 struct Tree<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   _marker0: PhantomData<P>,
@@ -301,7 +403,7 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> Tree<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   pub fn new (storage: S, branch_factor: usize, i: usize, n: usize) -> Self {
@@ -395,13 +497,33 @@ U: (Fn(&str) -> Result<S,Error>) {
     self.storage.write(0, &buf)?;
     Ok(())
   }
+  pub fn query_step (&mut self, bbox: (P,P), results: &mut Vec<(P,V)>,
+  cursors: &Vec<usize>, depth: usize, search_window: &mut (P,P))
+  -> Result<Vec<usize>,Error> {
+    let next_cursors = vec![];
+    for cursor in cursors {
+      let i = self.presize + cursor;
+      let buf = self.storage.read(i, self.row_size)?;
+      let pv: (P,V) = deserialize(&buf[0..])?;
+      println!("pv={:?} depth={}",pv, depth);
+      if contains(bbox.0, bbox.1, pv.0) {
+        results.push(pv);
+      }
+    }
+    Ok(next_cursors)
+  }
+  fn get (&mut self, index: usize, len: usize) -> Result<(P,V),Error> {
+    let buf = self.storage.read(index, self.row_size)?;
+    let pv: (P,V) = deserialize(&buf[0..])?;
+    Ok(pv)
+  }
 }
 
 #[derive(Debug)]
 pub struct BKDTree<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   branch_factor: usize,
@@ -418,7 +540,7 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> BKDTree<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy+'static,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   pub fn open (open_storage: U) -> Result<Self,Error>
@@ -484,6 +606,7 @@ U: (Fn(&str) -> Result<S,Error>) {
     for row in &self.staging.rows { rows.push(row) }
     for i in 0..last {
       self.trees[i].copy_into(&mut rows)?;
+      self.trees[i].storage.truncate(0)?;
       self.meta.mask[i] = false;
     }
     self.trees[last].build(&mut rows)?;

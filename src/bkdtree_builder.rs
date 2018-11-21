@@ -1,6 +1,7 @@
 extern crate failure;
 extern crate random_access_storage;
 extern crate serde;
+extern crate num_traits;
 
 use std::marker::PhantomData;
 use std::fmt::Debug;
@@ -8,11 +9,12 @@ use failure::Error;
 use random_access_storage::RandomAccess;
 use crate::{BKDTree,Point};
 use serde::{Serialize,de::DeserializeOwned};
+use num_traits::bounds::Bounded;
 
 pub struct BKDTreeBuilder<S,U,P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy+'static,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   _marker1: PhantomData<S>,
@@ -25,7 +27,7 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> BKDTreeBuilder<S,U,P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy+'static,
-T: Debug+PartialOrd+'static,
+T: Debug+Bounded+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   pub fn new (storage: U) -> Self {
