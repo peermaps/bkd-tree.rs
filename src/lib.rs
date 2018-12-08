@@ -24,7 +24,7 @@ pub use crate::bkdtree_builder::BKDTreeBuilder;
 pub struct QueryResults<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy+'static,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   staging_index: usize,
@@ -32,7 +32,6 @@ U: (Fn(&str) -> Result<S,Error>) {
   tree_depth: usize,
   tree_cursors: Vec<usize>,
   tree_results: Vec<(P,V)>,
-  search_window: (P,P),
   bkd: BKDTree<S,U,P,V,T>,
   deletes: Vec<(P,V)>,
   bbox: (P,P)
@@ -41,15 +40,10 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> QueryResults<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy+'static,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   fn new (bkd: BKDTree<S,U,P,V,T>, bbox: (P,P)) -> Self {
-    let mut search_window = (bbox.0,bbox.1);
-    for i in 0..bbox.0.len() {
-      search_window.0.set(i,T::min_value());
-      search_window.1.set(i,T::max_value());
-    }
     Self {
       bkd,
       bbox,
@@ -58,8 +52,7 @@ U: (Fn(&str) -> Result<S,Error>) {
       tree_index: 0,
       tree_depth: 0,
       tree_cursors: vec![0],
-      tree_results: vec![],
-      search_window
+      tree_results: vec![]
     }
   }
 }
@@ -67,7 +60,7 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> Iterator for QueryResults<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy+'static,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   type Item = Result<(P,V),Error>;
@@ -101,8 +94,7 @@ U: (Fn(&str) -> Result<S,Error>) {
           self.bbox,
           &mut self.tree_results,
           &self.tree_cursors,
-          self.tree_depth,
-          &mut self.search_window
+          self.tree_depth
         );
         match s {
           Err(e) => return Some(Err(e)),
@@ -250,7 +242,7 @@ impl<T> Point<T> for (T,T,T,T,T,T) where T: PartialOrd {
 #[derive(Debug)]
 pub struct Row<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
-T: Debug+Bounded+PartialOrd {
+T: Debug+Bounded+Copy+PartialOrd {
   _marker: PhantomData<T>,
   pub kind: RowKind,
   pub point: P,
@@ -261,7 +253,7 @@ pub enum RowKind { Insert, Delete }
 
 impl<P,V,T> Row<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
-T: Debug+Bounded+PartialOrd {
+T: Debug+Bounded+Copy+PartialOrd {
   pub fn insert (point: P, value: V) -> Self {
     Self { _marker: PhantomData, kind: RowKind::Insert, point, value }
   }
@@ -299,7 +291,7 @@ impl Meta {
 struct Staging<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy,
-T: Debug+Bounded+PartialOrd {
+T: Debug+Bounded+Copy+PartialOrd {
   rows: Vec<Row<P,V,T>>,
   n: usize,
   count: usize,
@@ -309,7 +301,7 @@ T: Debug+Bounded+PartialOrd {
 impl<P,V,T> Staging<P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy+'static,
-T: Debug+Bounded+PartialOrd+'static {
+T: Debug+Bounded+Copy+PartialOrd+'static {
   pub fn new (n: usize) -> Self {
     let presize = (n+7)/8;
     let len = 4+presize+n*(size_of::<P>()+size_of::<V>());
@@ -384,7 +376,7 @@ T: Debug+Bounded+PartialOrd+'static {
 struct Tree<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   _marker0: PhantomData<P>,
@@ -403,12 +395,12 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> Tree<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   pub fn new (storage: S, branch_factor: usize, i: usize, n: usize) -> Self {
     let size = n*2usize.pow(i as u32);
-    let presize = (size+7)/8;
+    let presize = (size+7)/8*2;
     let row_size = size_of::<P>() + size_of::<V>();
     Self {
       _marker0: PhantomData,
@@ -485,7 +477,14 @@ U: (Fn(&str) -> Result<S,Error>) {
     // TODO: hack, probably loses data:
     if index > self.size { return Ok(()) }
     let j = index/8;
-    buf[j] = buf[j] | (1 << (index % 8));
+    buf[j] = buf[j] | (1 << (index % 8)); // occupancy table
+    match row.kind {
+      RowKind::Insert => {},
+      RowKind::Delete => {
+        let k = self.presize/2 + j;
+        buf[k] = buf[k] | (1 << (index % 8)); // delete table
+      }
+    }
     let pv = (&row.point,&row.value);
     let i = self.presize + index*self.row_size;
     (&mut buf[i..i+self.row_size]).copy_from_slice(&serialize(&pv)?[0..]);
@@ -498,24 +497,36 @@ U: (Fn(&str) -> Result<S,Error>) {
     Ok(())
   }
   pub fn query_step (&mut self, bbox: (P,P), results: &mut Vec<(P,V)>,
-  cursors: &Vec<usize>, depth: usize, search_window: &mut (P,P))
+  cursors: &Vec<usize>, depth: usize)
   -> Result<Vec<usize>,Error> {
-    let next_cursors = vec![];
+    let mut next_cursors = vec![];
+    let mut range = (T::min_value(),T::max_value());
+    let axis = depth % bbox.0.len();
+    let brange = (bbox.0.get(axis),bbox.1.get(axis));
+    let b = self.branch_factor;
     for cursor in cursors {
-      let i = self.presize + cursor;
-      let buf = self.storage.read(i, self.row_size)?;
-      let pv: (P,V) = deserialize(&buf[0..])?;
-      println!("pv={:?} depth={}",pv, depth);
-      if contains(bbox.0, bbox.1, pv.0) {
-        results.push(pv);
+      for k in 0..b-1 {
+        let occbuf = self.storage.read((cursor+k)/8,1)?;
+        let empty = ((occbuf[0] >> ((cursor+k)%8))&1) == 0;
+        if empty { continue }
+        //let delbuf = self.storage.read(self.presize/2+(cursor+k)/8,1)?;
+        let i = self.presize+(cursor+k)*self.row_size;
+        let buf = self.storage.read(i, self.row_size)?;
+        let pv: (P,V) = deserialize(&buf[0..])?;
+        println!("{} {:?}", i, pv);
+        if contains(bbox.0, bbox.1, pv.0) {
+          results.push(pv);
+        }
+        let x = pv.0.get(axis);
+        range.1 = x;
+        if overlap(range, brange) {
+          let c = Self::calc_index(b, *cursor, k);
+          if c < self.size { next_cursors.push(c) }
+        }
+        range.0 = x;
       }
     }
     Ok(next_cursors)
-  }
-  fn get (&mut self, index: usize, len: usize) -> Result<(P,V),Error> {
-    let buf = self.storage.read(index, self.row_size)?;
-    let pv: (P,V) = deserialize(&buf[0..])?;
-    Ok(pv)
   }
 }
 
@@ -523,7 +534,7 @@ U: (Fn(&str) -> Result<S,Error>) {
 pub struct BKDTree<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   branch_factor: usize,
@@ -540,7 +551,7 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> BKDTree<S,U,P,V,T> where
 P: Debug+Serialize+DeserializeOwned+Copy+Point<T>+'static,
 V: Debug+Serialize+DeserializeOwned+Copy+'static,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   pub fn open (open_storage: U) -> Result<Self,Error>
@@ -647,4 +658,9 @@ where T: Debug+PartialOrd {
     if x > xmax || x < xmin { return false }
   }
   true
+}
+fn overlap<T: PartialOrd> (a: (T,T), b: (T,T)) -> bool where T: Copy {
+  (a.0 >= b.0 && a.0 <= b.1)
+    || (a.1 >= b.0 && a.1 <= b.1)
+    || (a.0 < b.0 && a.1 > b.1)
 }

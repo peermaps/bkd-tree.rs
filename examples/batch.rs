@@ -33,7 +33,7 @@ fn main () -> Result<(),Error> {
     for r in bkd.query(bbox) {
       match r {
         Ok((point,value)) => {
-          println!("{{ point: {:?}, value: {:?} }}", point, value);
+          //println!("{{ point: {:?}, value: {:?} }}", point, value);
         },
         Err(e) => return Err(e)
       }

@@ -13,5 +13,8 @@ serde_json = "1.0.33"
 
 [dev-dependencies]
 rand = "0.5.5"
-random-access-disk = "0.6.0"
 random-access-memory = "0.5.0"
+random-access-disk = "0.7.0"
+
+[lib]
+crate-type = ["cdylib","lib"]

@@ -14,7 +14,7 @@ use num_traits::bounds::Bounded;
 pub struct BKDTreeBuilder<S,U,P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy+'static,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   _marker1: PhantomData<S>,
@@ -27,7 +27,7 @@ U: (Fn(&str) -> Result<S,Error>) {
 impl<S,U,P,V,T> BKDTreeBuilder<S,U,P,V,T> where
 P: Debug+Serialize+Copy+Point<T>+'static,
 V: Debug+Serialize+Copy+'static,
-T: Debug+Bounded+PartialOrd+'static,
+T: Debug+Bounded+Copy+PartialOrd+'static,
 S: Debug+RandomAccess<Error=Error>,
 U: (Fn(&str) -> Result<S,Error>) {
   pub fn new (storage: U) -> Self {
